@@ -28,7 +28,6 @@ promptTemplate =
     "Pay special attention to the type of the hole, specifically whether it is a function.\n" <>
     "Make sure you synthesize an expression that matches the type of the hole.\n" <>
     "Output ONLY the raw Haskell expression(s), one per line.\n" <>
-    --"Include an explanation right after the expression, preceeded by a --.\n" <>
     "Do not include explanations, introductions, or any surrounding text.\n"<>
     "Feel free to any other functions from the list of imports to generate more complicated expressions.\n" <>
     "Output a maximum of {numexpr} expresssions.\n" 

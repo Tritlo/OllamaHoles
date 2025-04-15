@@ -11,7 +11,7 @@ cabal-version:      3.0
 --   http://haskell.org/cabal/users-guide/
 --
 -- The name of the package.
-name:               OllamaHoles
+name:               ollama-holes-plugin
 
 -- The package version.
 -- See the Haskell package versioning policy (PVP) for standards
@@ -59,7 +59,7 @@ library
     import:           warnings
 
     -- Modules exported by the library.
-    exposed-modules:  MyLib
+    exposed-modules:  GHC.Plugin.OllamaHoles
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -68,7 +68,7 @@ library
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.18.2.1
+    build-depends:    base ^>=4.18.2.1, ghc
 
     -- Directories containing source files.
     hs-source-dirs:   src

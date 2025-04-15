@@ -54,7 +54,7 @@ We get the following output:
 
 ## Installation
 
-1. Install [Ollama](https://ollama.com/docs/installation)
+1. Install [Ollama](https://ollama.com/download)
 2. Install the `gemma3:27b` model (or any other model you prefer) using the following command:
 
 ```bash

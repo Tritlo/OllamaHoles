@@ -1,5 +1,6 @@
 # Ollama Holes
 
+![image](https://github.com/user-attachments/assets/649ffcd2-0560-47d6-bbbe-74bae08cbb70)
 
 ## Introduction
 This is an example of a typed-hole plugin for GHC that uses the [Ollama](https://ollama.com/) LLM to fill in holes in Haskell code.

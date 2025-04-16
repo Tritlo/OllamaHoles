@@ -3,7 +3,7 @@
 ![image](https://github.com/user-attachments/assets/649ffcd2-0560-47d6-bbbe-74bae08cbb70)
 
 ## Introduction
-This is an example of a typed-hole plugin for GHC that uses the [Ollama](https://ollama.com/) LLM to fill in holes in Haskell code.
+This is an example of a typed-hole plugin for GHC that uses the [Ollama](https://ollama.com/) to host a local LLM to fill in holes in Haskell code.
 
 
 ## Example
@@ -70,3 +70,6 @@ cabal build
 
 ```bash
 cabal build Test
+```
+
+5. Enjoy! If you want to change the underlying model, make sure to pass the model name via the plugin arguments (see example)

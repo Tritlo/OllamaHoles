@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
+-- | The Ollama plugin for GHC
 module GHC.Plugin.OllamaHoles (plugin) where
 
 import Control.Monad (unless, when)

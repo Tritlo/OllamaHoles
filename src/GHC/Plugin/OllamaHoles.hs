@@ -122,6 +122,9 @@ plugin =
 -- | Preprocess the response to remove empty lines, lines with only spaces, and code blocks
 preProcess :: [Text] -> [Text]
 preProcess [] = []
+-- | Remove lines between <think> and </think> tags from e.g. deepseek
+preProcess (ln : lns) | T.isPrefixOf "<think>" ln = 
+    preProcess (tail $ dropWhile (not . T.isPrefixOf "</think>") lns)
 preProcess (ln : lns) | should_drop = preProcess lns
   where
     should_drop :: Bool
@@ -132,7 +135,7 @@ preProcess (ln : lns) | should_drop = preProcess lns
 preProcess (ln : lns) = transform ln : preProcess lns
   where
     transform :: Text -> Text
-    transform = id
+    transform = T.strip
 
 -- | Command line options for the plugin
 data Flags = Flags

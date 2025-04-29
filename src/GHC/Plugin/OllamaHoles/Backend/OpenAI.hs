@@ -9,6 +9,7 @@ import System.Environment (lookupEnv)
 
 import Data.Aeson (FromJSON (..), Value, object, parseJSON, (.:), (.=))
 import Data.Aeson.Types (Parser, parseMaybe)
+import qualified Data.Aeson as Aeson
 
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -37,8 +38,8 @@ openAICompatibleBackend base_url key_name = Backend {..}
             Just key -> do
                 (url, opts) <-  apiEndpoint
                 let headers = header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
-                response <- runReq defaultHttpConfig $ req GET (url /: "models") NoReqBody jsonResponse (headers <> opts)
-                return $ Just $ parseOpenAIModels (responseBody response)
+                response <- runReq defaultHttpConfig $ req GET (url /: "models") NoReqBody bsResponse (headers <> opts)
+                return $ parseOpenAIModels <$> Aeson.decodeStrict (responseBody response)
 
     parseOpenAIResponse :: Value -> Maybe Text
     parseOpenAIResponse = parseMaybe parseResponse
@@ -72,9 +73,8 @@ openAICompatibleBackend base_url key_name = Backend {..}
                             <> header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
 
                 response <- runReq defaultHttpConfig $
-                              req POST (url /: "chat" /: "completions") (ReqBodyJson requestBody) jsonResponse (headers <> opts)
-
-                case parseOpenAIResponse (responseBody response) of
+                              req POST (url /: "chat" /: "completions") (ReqBodyJson requestBody) bsResponse (headers <> opts)
+                case Aeson.decodeStrict (responseBody response) >>= parseOpenAIResponse of
                     Just content -> return $ Right content
                     Nothing ->
                         return $ Left $ "Failed to parse OpenAI response: " <> show (responseBody response)

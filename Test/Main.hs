@@ -1,6 +1,5 @@
 {-# OPTIONS_GHC -fplugin=GHC.Plugin.OllamaHoles #-}
-{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:backend=openai #-}
-{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=o3-mini #-}
+{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=gemma3:27b-it-qat #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:n=5 #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:debug=True #-}
 

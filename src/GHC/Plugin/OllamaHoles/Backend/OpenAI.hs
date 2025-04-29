@@ -2,7 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 
 -- | The OpenAI backend
-module GHC.Plugin.OllamaHoles.Backend.OpenAI (openAIBackend) where
+module GHC.Plugin.OllamaHoles.Backend.OpenAI (openAIBackend, openAICompatibleBackend) where
 
 import Network.HTTP.Req
 import System.Environment (lookupEnv)
@@ -15,21 +15,29 @@ import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import GHC.Plugin.OllamaHoles.Backend
 import Data.Maybe (fromMaybe)
+import Text.URI (mkURI)
+
 
 -- | The OpenAI backend
 openAIBackend :: Backend
-openAIBackend = Backend{..}
+openAIBackend = openAICompatibleBackend "api.openai.com" "OPENAI_API_KEY"
+
+-- | Any OpenAI compatible backend
+openAICompatibleBackend :: Text -> Text -> Backend
+openAICompatibleBackend base_url key_name = Backend {..}
   where
-    apiEndpoint = https "api.openai.com" /: "v1"
+    apiEndpoint = do uri <- mkURI base_url
+                     case useHttpsURI uri of
+                      Just (url, opts) -> return (url /: "v1", opts)
+                      Nothing -> error $ "could not parse " <> T.unpack base_url <> " as a URI"
     listModels = do
-        apiKey <- lookupEnv "OPENAI_API_KEY"
+        apiKey <- lookupEnv $ T.unpack key_name
         case apiKey of
             Nothing -> return Nothing
             Just key -> do
-                let url = apiEndpoint /: "models"
-                    headers = header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
-
-                response <- runReq defaultHttpConfig $ req GET url NoReqBody jsonResponse headers
+                (url, opts) <-  apiEndpoint
+                let headers = header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
+                response <- runReq defaultHttpConfig $ req GET (url /: "models") NoReqBody jsonResponse (headers <> opts)
                 return $ Just $ parseOpenAIModels (responseBody response)
 
     parseOpenAIResponse :: Value -> Maybe Text
@@ -48,9 +56,9 @@ openAIBackend = Backend{..}
                     messageObj .: "content"
 
     generateFits prompt modelName = do
-        apiKey <- lookupEnv "OPENAI_API_KEY"
+        apiKey <- lookupEnv $ T.unpack key_name
         case apiKey of
-            Nothing -> return $ Left "OpenAI API key not found. Set the OPENAI_API_KEY environment variable."
+            Nothing -> return $ Left $ "API key not found. Set the " <> T.unpack key_name <> " environment variable."
             Just key -> do
                 let requestBody =
                         object
@@ -58,12 +66,13 @@ openAIBackend = Backend{..}
                             , "messages" .= [object ["role" .= ("user" :: Text), "content" .= prompt]]
                             ]
 
-                let url = apiEndpoint /: "chat" /: "completions"
-                    headers =
+                (url, opts) <- apiEndpoint
+                let headers =
                         header "Content-Type" "application/json"
                             <> header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
 
-                response <- runReq defaultHttpConfig $ req POST url (ReqBodyJson requestBody) jsonResponse headers
+                response <- runReq defaultHttpConfig $
+                              req POST (url /: "chat" /: "completions") (ReqBodyJson requestBody) jsonResponse (headers <> opts)
 
                 case parseOpenAIResponse (responseBody response) of
                     Just content -> return $ Right content
@@ -75,12 +84,12 @@ parseOpenAIModels :: Value -> [Text]
 parseOpenAIModels value =
     fromMaybe [] (parseMaybe parseModels value)
   where
-    parseModels :: Value -> Parser [Text]
-
     extractModelId :: Value -> Parser Text
     extractModelId model = do
         obj <- parseJSON model
         obj .: "id"
+
+    parseModels :: Value -> Parser [Text]
     parseModels val = do
         obj <- parseJSON val
         models <- obj .: "data"

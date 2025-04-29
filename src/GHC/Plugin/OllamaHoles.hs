@@ -17,7 +17,7 @@ import GHC.Tc.Utils.Monad (getGblEnv, newTcRef)
 import GHC.Plugin.OllamaHoles.Backend
 
 import GHC.Plugin.OllamaHoles.Backend.Ollama (ollamaBackend)
-import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAIBackend)
+import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAICompatibleBackend)
 import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
 
 promptTemplate :: Text
@@ -35,11 +35,11 @@ promptTemplate =
         <> "Feel free to include any other functions from the list of imports to generate more complicated expressions.\n"
         <> "Output a maximum of {numexpr} expresssions.\n"
 
-getBackend :: Text -> Backend
-getBackend "ollama" = ollamaBackend
-getBackend "openai" = openAIBackend
-getBackend "gemini" = geminiBackend
-getBackend b = error $ "unknown backend: " <> T.unpack b
+getBackend :: Flags -> Backend
+getBackend Flags {backend_name = "ollama"} = ollamaBackend
+getBackend Flags {backend_name = "gemini"}= geminiBackend
+getBackend Flags{backend_name = "openai", ..}  = openAICompatibleBackend openai_base_url openai_key_name
+getBackend Flags{..} = error $ "unknown backend: " <> T.unpack backend_name
 
 pluginName :: Text
 pluginName = "Ollama Plugin"
@@ -63,12 +63,12 @@ plugin =
         }
   where
     fitPlugin opts hole fits = do
-        let Flags{..} = parseFlags opts
+        let flags@Flags{..} = parseFlags opts
         dflags <- getDynFlags
         gbl_env <- getGblEnv
         let mod_name = moduleNameString $ moduleName $ tcg_mod gbl_env
             imports = tcg_imports gbl_env
-        let backend = getBackend backend_name
+        let backend = getBackend flags
         liftIO $ do
             available_models <- listModels backend
             case available_models of
@@ -163,6 +163,8 @@ data Flags = Flags
     , backend_name :: Text
     , num_expr :: Int
     , debug :: Bool
+    , openai_base_url :: Text
+    , openai_key_name :: Text
     }
 
 -- | Default flags for the plugin
@@ -173,6 +175,8 @@ defaultFlags =
         , backend_name = "ollama"
         , num_expr = 5
         , debug = False
+        , openai_base_url = "https://api.openai.com"
+        , openai_key_name = "OPENAI_API_KEY"
         }
 
 -- | Parse command line options
@@ -189,6 +193,14 @@ parseFlags = parseFlags' defaultFlags
         | T.isPrefixOf "backend=" (T.pack opt) =
             let backend_name = T.drop (T.length "backend=") (T.pack opt)
              in parseFlags' flags{backend_name = backend_name} opts
+    parseFlags' flags (opt : opts)
+        | T.isPrefixOf "openai_base_url=" (T.pack opt) =
+            let openai_base_url = T.drop (T.length "openai_base_url=") (T.pack opt)
+             in parseFlags' flags{openai_base_url = openai_base_url} opts
+    parseFlags' flags (opt : opts)
+        | T.isPrefixOf "openai_key_name=" (T.pack opt) =
+            let openai_key_name = T.drop (T.length "openai_key_name=") (T.pack opt)
+             in parseFlags' flags{openai_key_name = openai_key_name} opts
     parseFlags' flags (opt : opts)
         | T.isPrefixOf "debug=" (T.pack opt) =
             let debug = T.unpack $ T.drop (T.length "debug=") (T.pack opt)

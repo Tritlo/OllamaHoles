@@ -16,7 +16,7 @@ For a smaller model, we suggest `gemma3:4b-it-qat`, or `deepcoder:1.5b`.
 This plugin is also availble on Hackage [https://hackage.haskell.org/package/ollama-holes-plugin](https://hackage.haskell.org/package/ollama-holes-plugin)
 
 ## Example
-Given 
+Given
 
 ```haskell
 {-# OPTIONS_GHC -fplugin=GHC.Plugin.OllamaHoles #-}
@@ -82,3 +82,16 @@ cabal build Test
 ```
 
 5. Enjoy! If you want to change the underlying model, make sure to pass the model name via the plugin arguments (see example)
+
+## OpenAI and Gemini backends
+
+The plugin now supports using the OpenAI API and Gemini APIs to generate valid hole fits.
+Simply set the backend flag `-fplugin-opt=GHC.Plugin.OllamaHoles:backend=openai`,
+or `-fplugin-opt=GHC.Plugin.OllamaHoles:backend=gemini`, and make sure that
+you have the `OPENAI_API_KEY` or `GEMINI_API_KEY` set in your environment.
+
+To use with any other OpenAI compatible api (like groq or OpenRouter), simply set
+`-fplugin-opt=GHC.Plugin.OllamaHoles:backend=openai`,
+and
+`-fplugin-opt=GHC.Plugin.OllamaHoles:openai_base_url=https://api.groq.com/openai`,
+`-fplugin-opt=GHC.Plugin.OllamaHoles:openai_key_name=GROQ_API_KEY`,

@@ -118,6 +118,7 @@ library
                       ollama-haskell ^>= 0.1,
                       text ^>= 2.1,
                       req ^>= 3.13,
+                      modern-uri ^>= 0.3,
                       aeson ^>= 2.2,
 
 

@@ -27,7 +27,6 @@ geminiBackend = Backend{..}
             Just key -> do
                 let url = apiEndpoint /: "models"
                 response <- runReq defaultHttpConfig $ req GET url NoReqBody jsonResponse ("key" =: key)
-                print response
                 return $ Just $ parseGeminiModels (responseBody response)
 
     parseGeminiResponse :: Value -> Maybe Text

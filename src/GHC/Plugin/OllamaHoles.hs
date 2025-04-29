@@ -16,8 +16,9 @@ import GHC.Tc.Utils.Monad (getGblEnv, newTcRef)
 
 import GHC.Plugin.OllamaHoles.Backend
 
-import GHC.Plugin.OllamaHoles.Backend.Ollama
-import GHC.Plugin.OllamaHoles.Backend.OpenAI
+import GHC.Plugin.OllamaHoles.Backend.Ollama (ollamaBackend)
+import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAIBackend)
+import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
 
 promptTemplate :: Text
 promptTemplate =
@@ -37,6 +38,7 @@ promptTemplate =
 getBackend :: Text -> Backend
 getBackend "ollama" = ollamaBackend
 getBackend "openai" = openAIBackend
+getBackend "gemini" = geminiBackend
 getBackend b = error $ "unknown backend: " <> T.unpack b
 
 pluginName :: Text

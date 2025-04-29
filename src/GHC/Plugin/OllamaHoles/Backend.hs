@@ -1,5 +1,5 @@
 -- | The Backend data type
-module GHC.Plugin.OllamaHoles.Backend where
+module GHC.Plugin.OllamaHoles.Backend (Backend(..)) where
 
 import Data.Text (Text)
 
@@ -8,3 +8,4 @@ data Backend = Backend
     { listModels :: IO (Maybe [Text])
     , generateFits :: Text -> Text -> IO (Either String Text)
     }
+

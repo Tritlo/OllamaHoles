@@ -4,7 +4,6 @@
 -- | The OpenAI backend
 module GHC.Plugin.OllamaHoles.Backend.OpenAI (openAIBackend) where
 
-import Data.Maybe (fromMaybe)
 import Network.HTTP.Req
 import System.Environment (lookupEnv)
 
@@ -15,36 +14,23 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import GHC.Plugin.OllamaHoles.Backend
+import Data.Maybe (fromMaybe)
 
 -- | The OpenAI backend
 openAIBackend :: Backend
 openAIBackend = Backend{..}
   where
+    apiEndpoint = https "api.openai.com" /: "v1"
     listModels = do
         apiKey <- lookupEnv "OPENAI_API_KEY"
         case apiKey of
             Nothing -> return Nothing
             Just key -> do
-                let url = https "api.openai.com" /: "v1" /: "models"
+                let url = apiEndpoint /: "models"
                     headers = header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
 
                 response <- runReq defaultHttpConfig $ req GET url NoReqBody jsonResponse headers
                 return $ Just $ parseOpenAIModels (responseBody response)
-
-    parseOpenAIModels :: Value -> [Text]
-    parseOpenAIModels value =
-        fromMaybe [] (parseMaybe parseModels value)
-      where
-        parseModels :: Value -> Parser [Text]
-
-        extractModelId :: Value -> Parser Text
-        extractModelId model = do
-            obj <- parseJSON model
-            obj .: "id"
-        parseModels val = do
-            obj <- parseJSON val
-            models <- obj .: "data"
-            mapM extractModelId models
 
     parseOpenAIResponse :: Value -> Maybe Text
     parseOpenAIResponse = parseMaybe parseResponse
@@ -72,7 +58,7 @@ openAIBackend = Backend{..}
                             , "messages" .= [object ["role" .= ("user" :: Text), "content" .= prompt]]
                             ]
 
-                let url = https "api.openai.com" /: "v1" /: "chat" /: "completions"
+                let url = apiEndpoint /: "chat" /: "completions"
                     headers =
                         header "Content-Type" "application/json"
                             <> header "Authorization" ("Bearer " <> encodeUtf8 (T.pack key))
@@ -83,3 +69,19 @@ openAIBackend = Backend{..}
                     Just content -> return $ Right content
                     Nothing ->
                         return $ Left $ "Failed to parse OpenAI response: " <> show (responseBody response)
+
+-- | Parse the models from the endpoint
+parseOpenAIModels :: Value -> [Text]
+parseOpenAIModels value =
+    fromMaybe [] (parseMaybe parseModels value)
+  where
+    parseModels :: Value -> Parser [Text]
+
+    extractModelId :: Value -> Parser Text
+    extractModelId model = do
+        obj <- parseJSON model
+        obj .: "id"
+    parseModels val = do
+        obj <- parseJSON val
+        models <- obj .: "data"
+        mapM extractModelId models

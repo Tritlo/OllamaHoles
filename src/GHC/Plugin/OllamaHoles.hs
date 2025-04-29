@@ -13,16 +13,11 @@ import GHC.Plugins hiding ((<>))
 import GHC.Tc.Types
 import GHC.Tc.Types.Constraint (Hole (..), ctLocEnv, ctLocSpan)
 import GHC.Tc.Utils.Monad (getGblEnv, newTcRef)
-import Ollama (GenerateOps (..))
-import Ollama qualified
 
--- | Options for the LLM model
-genOps :: Ollama.GenerateOps
-genOps =
-    Ollama.defaultGenerateOps
-        { modelName = ""
-        , prompt = ""
-        }
+import GHC.Plugin.OllamaHoles.Backend
+
+import GHC.Plugin.OllamaHoles.Backend.Ollama
+import GHC.Plugin.OllamaHoles.Backend.OpenAI
 
 promptTemplate :: Text
 promptTemplate =
@@ -39,6 +34,14 @@ promptTemplate =
         <> "Feel free to include any other functions from the list of imports to generate more complicated expressions.\n"
         <> "Output a maximum of {numexpr} expresssions.\n"
 
+getBackend :: Text -> Backend
+getBackend "ollama" = ollamaBackend
+getBackend "openai" = openAIBackend
+getBackend b = error $ "unknown backend: " <> T.unpack b
+
+pluginName :: Text
+pluginName = "Ollama Plugin"
+
 -- | Ollama plugin for GHC
 plugin :: Plugin
 plugin =
@@ -52,79 +55,94 @@ plugin =
                         const
                             HoleFitPlugin
                                 { candPlugin = \_ c -> return c -- Don't filter candidates
-                                , fitPlugin = \hole fits -> do
-                                    let Flags{..} = parseFlags opts
-                                    dflags <- getDynFlags
-                                    gbl_env <- getGblEnv
-                                    let mod_name = moduleNameString $ moduleName $ tcg_mod gbl_env
-                                        imports = tcg_imports gbl_env
-                                    liftIO $ do
-                                        available_models <- Ollama.list
-                                        case available_models of
-                                            Nothing -> T.putStrLn "--- Ollama plugin: No models available.--"
-                                            Just (Ollama.Models models) -> do
-                                                unless (any ((== model_name) . Ollama.name) models) $
-                                                    error $
-                                                        "--- Ollama plugin: Model "
-                                                            <> T.unpack model_name
-                                                            <> " not found. "
-                                                            <> "Use `ollama pull` to download the model, or specify another model using "
-                                                            <> "`-fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>` ---"
-                                        when debug $ T.putStrLn "--- Ollama Plugin: Hole Found ---"
-                                        let mn = "Module: " <> mod_name
-                                        let lc = "Location: " <> showSDoc dflags (ppr $ ctLocSpan . hole_loc <$> th_hole hole)
-                                        let im = "Imports: " <> showSDoc dflags (ppr $ moduleEnvKeys $ imp_mods imports)
-
-                                        case th_hole hole of
-                                            Just h -> do
-                                                let lcl_env = ctLocEnv (hole_loc h)
-                                                let hv = "Hole variable: _" <> occNameString (occName $ hole_occ h)
-                                                let ht = "Hole type: " <> showSDoc dflags (ppr $ hole_ty h)
-                                                let rc = "Relevant constraints: " <> showSDoc dflags (ppr $ th_relevant_cts hole)
-                                                let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ tcl_rdr lcl_env)
-                                                let ge = "Global environment (bindings): " <> showSDoc dflags (ppr $ tcg_binds gbl_env)
-                                                let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
-                                                let prompt' =
-                                                        replacePlaceholders
-                                                            promptTemplate
-                                                            [ ("{module}", mn)
-                                                            , ("{location}", lc)
-                                                            , ("{imports}", im)
-                                                            , ("{hole_var}", hv)
-                                                            , ("{hole_type}", ht)
-                                                            , ("{relevant_constraints}", rc)
-                                                            , ("{local_env}", le)
-                                                            , ("{global_env}", ge)
-                                                            , ("{candidate_fits}", cf)
-                                                            , ("{numexpr}", show num_expr)
-                                                            ]
-                                                res <- Ollama.generate genOps{prompt = prompt', modelName = model_name}
-                                                case res of
-                                                    Right rsp -> do
-                                                        let lns = (preProcess . T.lines) $ Ollama.response_ rsp
-                                                        when debug $ do
-                                                            T.putStrLn $ "--- Ollama Plugin: Prompt ---\n" <> prompt'
-                                                            T.putStrLn $ "--- Ollama Plugin: Response ---\n" <> Ollama.response_ rsp
-                                                        let fits' = map (RawHoleFit . text . T.unpack) lns
-                                                        -- Return the generated fits
-                                                        return fits'
-                                                    Left err -> do
-                                                        when debug $
-                                                            putStrLn $
-                                                                "Ollama plugin failed to generate a response.\n" <> err
-                                                        -- Return the original fits without modification
-                                                        return fits
-                                            Nothing -> return fits
+                                , fitPlugin = fitPlugin opts
                                 }
                     }
         }
+  where
+    fitPlugin opts hole fits = do
+        let Flags{..} = parseFlags opts
+        dflags <- getDynFlags
+        gbl_env <- getGblEnv
+        let mod_name = moduleNameString $ moduleName $ tcg_mod gbl_env
+            imports = tcg_imports gbl_env
+        let backend = getBackend backend_name
+        liftIO $ do
+            available_models <- listModels backend
+            case available_models of
+                Nothing ->
+                    error $
+                        "--- " <> T.unpack pluginName <> ": No models available, check your configuration ---"
+                Just models -> do
+                    unless (model_name `elem` models) $
+                        error $
+                            "--- "
+                                <> T.unpack pluginName
+                                <> ": Model "
+                                <> T.unpack model_name
+                                <> " not found. "
+                                <> ( if backend_name == "ollama"
+                                        then "Use `ollama pull` to download the model, or "
+                                        else ""
+                                   )
+                                <> "specify another model using "
+                                <> "`-fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>` ---"
+                                <> "--- Availble models: "
+                                <> T.unpack (T.unlines models)
+                                <> " ---"
+                    when debug $ T.putStrLn $ "--- " <> pluginName <> ": Hole Found ---"
+                    let mn = "Module: " <> mod_name
+                    let lc = "Location: " <> showSDoc dflags (ppr $ ctLocSpan . hole_loc <$> th_hole hole)
+                    let im = "Imports: " <> showSDoc dflags (ppr $ moduleEnvKeys $ imp_mods imports)
+
+                    case th_hole hole of
+                        Just h -> do
+                            let lcl_env = ctLocEnv (hole_loc h)
+                            let hv = "Hole variable: _" <> occNameString (occName $ hole_occ h)
+                            let ht = "Hole type: " <> showSDoc dflags (ppr $ hole_ty h)
+                            let rc = "Relevant constraints: " <> showSDoc dflags (ppr $ th_relevant_cts hole)
+                            let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ tcl_rdr lcl_env)
+                            let ge = "Global environment (bindings): " <> showSDoc dflags (ppr $ tcg_binds gbl_env)
+                            let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
+                            let prompt' =
+                                    replacePlaceholders
+                                        promptTemplate
+                                        [ ("{module}", mn)
+                                        , ("{location}", lc)
+                                        , ("{imports}", im)
+                                        , ("{hole_var}", hv)
+                                        , ("{hole_type}", ht)
+                                        , ("{relevant_constraints}", rc)
+                                        , ("{local_env}", le)
+                                        , ("{global_env}", ge)
+                                        , ("{candidate_fits}", cf)
+                                        , ("{numexpr}", show num_expr)
+                                        ]
+                            res <- generateFits backend prompt' model_name
+                            case res of
+                                Right rsp -> do
+                                    let lns = (preProcess . T.lines) rsp
+                                    when debug $ do
+                                        T.putStrLn $ "--- " <> pluginName <> ": Prompt ---\n" <> prompt'
+                                        T.putStrLn $ "--- " <> pluginName <> ": Response ---\n" <> rsp
+                                    let fits' = map (RawHoleFit . text . T.unpack) lns
+                                    -- Return the generated fits
+                                    return fits'
+                                Left err -> do
+                                    when debug $
+                                        putStrLn $
+                                            T.unpack pluginName <> " failed to generate a response.\n" <> err
+                                    -- Return the original fits without modification
+                                    return fits
+                        Nothing -> return fits
 
 -- | Preprocess the response to remove empty lines, lines with only spaces, and code blocks
 preProcess :: [Text] -> [Text]
 preProcess [] = []
--- | Remove lines between <think> and </think> tags from e.g. deepseek
-preProcess (ln : lns) | T.isPrefixOf "<think>" ln = 
-    preProcess (tail $ dropWhile (not . T.isPrefixOf "</think>") lns)
+-- \| Remove lines between <think> and </think> tags from e.g. deepseek
+preProcess (ln : lns)
+    | T.isPrefixOf "<think>" ln =
+        preProcess (tail $ dropWhile (not . T.isPrefixOf "</think>") lns)
 preProcess (ln : lns) | should_drop = preProcess lns
   where
     should_drop :: Bool
@@ -140,6 +158,7 @@ preProcess (ln : lns) = transform ln : preProcess lns
 -- | Command line options for the plugin
 data Flags = Flags
     { model_name :: Text
+    , backend_name :: Text
     , num_expr :: Int
     , debug :: Bool
     }
@@ -149,6 +168,7 @@ defaultFlags :: Flags
 defaultFlags =
     Flags
         { model_name = "gemma3:27b-it-qat"
+        , backend_name = "ollama"
         , num_expr = 5
         , debug = False
         }
@@ -163,6 +183,10 @@ parseFlags = parseFlags' defaultFlags
         | T.isPrefixOf "model=" (T.pack opt) =
             let model_name = T.drop (T.length "model=") (T.pack opt)
              in parseFlags' flags{model_name = model_name} opts
+    parseFlags' flags (opt : opts)
+        | T.isPrefixOf "backend=" (T.pack opt) =
+            let backend_name = T.drop (T.length "backend=") (T.pack opt)
+             in parseFlags' flags{backend_name = backend_name} opts
     parseFlags' flags (opt : opts)
         | T.isPrefixOf "debug=" (T.pack opt) =
             let debug = T.unpack $ T.drop (T.length "debug=") (T.pack opt)

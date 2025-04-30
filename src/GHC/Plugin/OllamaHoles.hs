@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -11,7 +12,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as T
 import GHC.Plugins hiding ((<>))
 import GHC.Tc.Types
-import GHC.Tc.Types.Constraint (Hole (..), ctLocEnv, ctLocSpan)
+import GHC.Tc.Types.Constraint (Hole (..))
 import GHC.Tc.Utils.Monad (getGblEnv, newTcRef)
 
 import GHC.Plugin.OllamaHoles.Backend
@@ -31,6 +32,16 @@ import GHC.Tc.Errors.Hole qualified as GHC (tcCheckHoleFit, withoutUnification)
 import GHC.Tc.Gen.App qualified as GHC (tcInferSigma)
 import GHC.Tc.Utils.TcType qualified as GHC (tyCoFVsOfType)
 import GHC.Types.SrcLoc qualified as GHC (mkRealSrcLoc)
+#if __GLASGOW_HASKELL__ >= 908
+import GHC.Tc.Types.Constraint (CtLocEnv(..))
+#endif
+
+#if __GLASGOW_HASKELL__ >= 912
+import GHC.Tc.Types.CtLoc (ctLocEnv, ctLocSpan)
+import qualified Data.Map as Map
+#else
+import GHC.Tc.Types.Constraint (ctLocEnv, ctLocSpan)
+#endif
 
 -- | Prompt used to prompt the LLM
 promptTemplate :: Text
@@ -106,7 +117,11 @@ plugin =
                 liftIO $ when debug $ T.putStrLn $ "--- " <> pluginName <> ": Hole Found ---"
                 let mn = "Module: " <> mod_name
                 let lc = "Location: " <> showSDoc dflags (ppr $ ctLocSpan . hole_loc <$> th_hole hole)
+#if __GLASGOW_HASKELL__ >= 912
+                let im = "Imports: " <> showSDoc dflags (ppr $ Map.keys $ imp_mods imports)
+#else
                 let im = "Imports: " <> showSDoc dflags (ppr $ moduleEnvKeys $ imp_mods imports)
+#endif
 
                 case th_hole hole of
                     Just h -> do
@@ -114,7 +129,13 @@ plugin =
                         let hv = "Hole variable: _" <> occNameString (occName $ hole_occ h)
                         let ht = "Hole type: " <> showSDoc dflags (ppr $ hole_ty h)
                         let rc = "Relevant constraints: " <> showSDoc dflags (ppr $ th_relevant_cts hole)
+
+#if __GLASGOW_HASKELL__ >= 908
+                        let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ ctl_rdr lcl_env)
+#else
                         let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ tcl_rdr lcl_env)
+#endif
+
                         let ge = "Global environment (bindings): " <> showSDoc dflags (ppr $ tcg_binds gbl_env)
                         let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
                         let prompt' =
@@ -201,7 +222,7 @@ preProcess [] = []
 -- \| Remove lines between <think> and </think> tags from e.g. deepseek
 preProcess (ln : lns)
     | T.isPrefixOf "<think>" ln =
-        preProcess (tail $ dropWhile (not . T.isPrefixOf "</think>") lns)
+        preProcess (drop 1 $ dropWhile (not . T.isPrefixOf "</think>") lns)
 preProcess (ln : lns) | should_drop = preProcess lns
   where
     should_drop :: Bool

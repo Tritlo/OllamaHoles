@@ -51,11 +51,13 @@ Main.hs:12:20: error: [GHC-88464]
         main :: IO () (bound at Main.hs:12:1)
       Valid hole fits include
         map show
-        map (\x -> "Number: " ++ show x)
-        (\xs -> map (\x -> "Element: " ++ show x) xs)
-        (\xs -> concatMap (\x -> ["Element: " ++ show x]) xs)
+        Prelude.map show
+        (\xs -> map show xs)
+        (\xs -> [show x | x <- xs])
+        (\xs -> concatMap (return . show) xs)
    |
 12 | main = do let k = (_b :: [Int] -> [String])
+   |                    ^^
 ```
 
 ## Installation

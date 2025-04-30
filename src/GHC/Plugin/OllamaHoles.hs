@@ -19,6 +19,7 @@ import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
 import GHC.Plugin.OllamaHoles.Backend.Ollama (ollamaBackend)
 import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAICompatibleBackend)
 
+import Control.Monad.Catch (handleAll)
 import GHC (GhcPs, LHsExpr)
 import GHC.Data.StringBuffer qualified as GHC (stringToStringBuffer)
 import GHC.Driver.Config.Parser qualified as GHC (initParserOpts)
@@ -170,7 +171,7 @@ verifyHoleFit debug hole fit | Just h <- th_hole hole = do
                         showPprUnsafe $
                             GHC.getPsErrorMessages st
             return False
-        GHC.POk _ (p_e :: LHsExpr GhcPs) -> do
+        GHC.POk _ (p_e :: LHsExpr GhcPs) -> handleAll falseOnErr $ do
             -- If parsing was successful, we try renaming the expression
             (rn_e, free_vars) <- GHC.rnLExpr p_e
             when debug $
@@ -188,6 +189,10 @@ verifyHoleFit debug hole fit | Just h <- th_hole hole = do
                     putStrLn $
                         showPprUnsafe wrapper
             return does_fit
+  where
+    falseOnErr e = liftIO $ do
+        when debug $ print e
+        return False
 verifyHoleFit _ _ _ = return False
 
 -- | Preprocess the response to remove empty lines, lines with only spaces, and code blocks

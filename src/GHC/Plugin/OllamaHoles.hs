@@ -4,7 +4,7 @@
 -- | The Ollama plugin for GHC
 module GHC.Plugin.OllamaHoles (plugin) where
 
-import Control.Monad (unless, when)
+import Control.Monad (filterM, unless, when)
 import Data.Char (isSpace)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -15,11 +15,23 @@ import GHC.Tc.Types.Constraint (Hole (..), ctLocEnv, ctLocSpan)
 import GHC.Tc.Utils.Monad (getGblEnv, newTcRef)
 
 import GHC.Plugin.OllamaHoles.Backend
-
+import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
 import GHC.Plugin.OllamaHoles.Backend.Ollama (ollamaBackend)
 import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAICompatibleBackend)
-import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
 
+import GHC (GhcPs, LHsExpr)
+import GHC.Data.StringBuffer qualified as GHC (stringToStringBuffer)
+import GHC.Driver.Config.Parser qualified as GHC (initParserOpts)
+import GHC.Parser qualified as GHC (parseExpression)
+import GHC.Parser.Lexer qualified as GHC (ParseResult (..), getPsErrorMessages, initParserState, unP)
+import GHC.Parser.PostProcess qualified as GHC (runPV, unECP)
+import GHC.Rename.Expr qualified as GHC (rnLExpr)
+import GHC.Tc.Errors.Hole qualified as GHC (tcCheckHoleFit, withoutUnification)
+import GHC.Tc.Gen.App qualified as GHC (tcInferSigma)
+import GHC.Tc.Utils.TcType qualified as GHC (tyCoFVsOfType)
+import GHC.Types.SrcLoc qualified as GHC (mkRealSrcLoc)
+
+-- | Prompt used to prompt the LLM
 promptTemplate :: Text
 promptTemplate =
     "You are a typed-hole plugin within GHC, the Glasgow Haskell Compiler.\n"
@@ -35,14 +47,12 @@ promptTemplate =
         <> "Feel free to include any other functions from the list of imports to generate more complicated expressions.\n"
         <> "Output a maximum of {numexpr} expresssions.\n"
 
+-- | Determine which backend to use
 getBackend :: Flags -> Backend
-getBackend Flags {backend_name = "ollama"} = ollamaBackend
-getBackend Flags {backend_name = "gemini"}= geminiBackend
-getBackend Flags{backend_name = "openai", ..}  = openAICompatibleBackend openai_base_url openai_key_name
+getBackend Flags{backend_name = "ollama"} = ollamaBackend
+getBackend Flags{backend_name = "gemini"} = geminiBackend
+getBackend Flags{backend_name = "openai", ..} = openAICompatibleBackend openai_base_url openai_key_name
 getBackend Flags{..} = error $ "unknown backend: " <> T.unpack backend_name
-
-pluginName :: Text
-pluginName = "Ollama Plugin"
 
 -- | Ollama plugin for GHC
 plugin :: Plugin
@@ -62,6 +72,7 @@ plugin =
                     }
         }
   where
+    pluginName = "Ollama Plugin"
     fitPlugin opts hole fits = do
         let flags@Flags{..} = parseFlags opts
         dflags <- getDynFlags
@@ -69,74 +80,115 @@ plugin =
         let mod_name = moduleNameString $ moduleName $ tcg_mod gbl_env
             imports = tcg_imports gbl_env
         let backend = getBackend flags
-        liftIO $ do
-            available_models <- listModels backend
-            case available_models of
-                Nothing ->
+        available_models <- liftIO $ listModels backend
+        case available_models of
+            Nothing ->
+                error $
+                    "--- " <> T.unpack pluginName <> ": No models available, check your configuration ---"
+            Just models -> do
+                unless (model_name `elem` models) $
                     error $
-                        "--- " <> T.unpack pluginName <> ": No models available, check your configuration ---"
-                Just models -> do
-                    unless (model_name `elem` models) $
-                        error $
-                            "--- "
-                                <> T.unpack pluginName
-                                <> ": Model "
-                                <> T.unpack model_name
-                                <> " not found. "
-                                <> ( if backend_name == "ollama"
-                                        then "Use `ollama pull` to download the model, or "
-                                        else ""
-                                   )
-                                <> "specify another model using "
-                                <> "`-fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>` ---"
-                                <> "--- Availble models: "
-                                <> T.unpack (T.unlines models)
-                                <> " ---"
-                    when debug $ T.putStrLn $ "--- " <> pluginName <> ": Hole Found ---"
-                    let mn = "Module: " <> mod_name
-                    let lc = "Location: " <> showSDoc dflags (ppr $ ctLocSpan . hole_loc <$> th_hole hole)
-                    let im = "Imports: " <> showSDoc dflags (ppr $ moduleEnvKeys $ imp_mods imports)
+                        "--- "
+                            <> T.unpack pluginName
+                            <> ": Model "
+                            <> T.unpack model_name
+                            <> " not found. "
+                            <> ( if backend_name == "ollama"
+                                    then "Use `ollama pull` to download the model, or "
+                                    else ""
+                               )
+                            <> "specify another model using "
+                            <> "`-fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>` ---"
+                            <> "--- Availble models: "
+                            <> T.unpack (T.unlines models)
+                            <> " ---"
+                liftIO $ when debug $ T.putStrLn $ "--- " <> pluginName <> ": Hole Found ---"
+                let mn = "Module: " <> mod_name
+                let lc = "Location: " <> showSDoc dflags (ppr $ ctLocSpan . hole_loc <$> th_hole hole)
+                let im = "Imports: " <> showSDoc dflags (ppr $ moduleEnvKeys $ imp_mods imports)
 
-                    case th_hole hole of
-                        Just h -> do
-                            let lcl_env = ctLocEnv (hole_loc h)
-                            let hv = "Hole variable: _" <> occNameString (occName $ hole_occ h)
-                            let ht = "Hole type: " <> showSDoc dflags (ppr $ hole_ty h)
-                            let rc = "Relevant constraints: " <> showSDoc dflags (ppr $ th_relevant_cts hole)
-                            let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ tcl_rdr lcl_env)
-                            let ge = "Global environment (bindings): " <> showSDoc dflags (ppr $ tcg_binds gbl_env)
-                            let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
-                            let prompt' =
-                                    replacePlaceholders
-                                        promptTemplate
-                                        [ ("{module}", mn)
-                                        , ("{location}", lc)
-                                        , ("{imports}", im)
-                                        , ("{hole_var}", hv)
-                                        , ("{hole_type}", ht)
-                                        , ("{relevant_constraints}", rc)
-                                        , ("{local_env}", le)
-                                        , ("{global_env}", ge)
-                                        , ("{candidate_fits}", cf)
-                                        , ("{numexpr}", show num_expr)
-                                        ]
-                            res <- generateFits backend prompt' model_name
-                            case res of
-                                Right rsp -> do
-                                    let lns = (preProcess . T.lines) rsp
-                                    when debug $ do
-                                        T.putStrLn $ "--- " <> pluginName <> ": Prompt ---\n" <> prompt'
-                                        T.putStrLn $ "--- " <> pluginName <> ": Response ---\n" <> rsp
-                                    let fits' = map (RawHoleFit . text . T.unpack) lns
-                                    -- Return the generated fits
-                                    return fits'
-                                Left err -> do
+                case th_hole hole of
+                    Just h -> do
+                        let lcl_env = ctLocEnv (hole_loc h)
+                        let hv = "Hole variable: _" <> occNameString (occName $ hole_occ h)
+                        let ht = "Hole type: " <> showSDoc dflags (ppr $ hole_ty h)
+                        let rc = "Relevant constraints: " <> showSDoc dflags (ppr $ th_relevant_cts hole)
+                        let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ tcl_rdr lcl_env)
+                        let ge = "Global environment (bindings): " <> showSDoc dflags (ppr $ tcg_binds gbl_env)
+                        let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
+                        let prompt' =
+                                replacePlaceholders
+                                    promptTemplate
+                                    [ ("{module}", mn)
+                                    , ("{location}", lc)
+                                    , ("{imports}", im)
+                                    , ("{hole_var}", hv)
+                                    , ("{hole_type}", ht)
+                                    , ("{relevant_constraints}", rc)
+                                    , ("{local_env}", le)
+                                    , ("{global_env}", ge)
+                                    , ("{candidate_fits}", cf)
+                                    , ("{numexpr}", show num_expr)
+                                    ]
+                        res <- liftIO $ generateFits backend prompt' model_name
+                        case res of
+                            Right rsp -> do
+                                let lns = (preProcess . T.lines) rsp
+                                verified <- filterM (verifyHoleFit debug hole) lns
+                                liftIO $ when debug $ do
+                                    T.putStrLn $ "--- " <> pluginName <> ": Prompt ---\n" <> prompt'
+                                    T.putStrLn $ "--- " <> pluginName <> ": Response ---\n" <> rsp
+                                let fits' = map (RawHoleFit . text . T.unpack) verified
+                                -- Return the generated fits
+                                return fits'
+                            Left err -> do
+                                liftIO $
                                     when debug $
-                                        putStrLn $
-                                            T.unpack pluginName <> " failed to generate a response.\n" <> err
-                                    -- Return the original fits without modification
-                                    return fits
-                        Nothing -> return fits
+                                        T.putStrLn $
+                                            pluginName <> " failed to generate a response.\n" <> T.pack err
+                                -- Return the original fits without modification
+                                return fits
+                    Nothing -> return fits
+
+-- | Check that the hole fit matches the type of the hole
+verifyHoleFit :: Bool -> TypedHole -> Text -> TcM Bool
+verifyHoleFit debug hole fit | Just h <- th_hole hole = do
+    -- Instaniate a new IORef session with the current HscEnv.
+    -- First we try parsing the suggest hole-fits
+    dflags <- getDynFlags
+    let parsed =
+            GHC.unP (GHC.parseExpression >>= \p -> GHC.runPV $ GHC.unECP p) $
+                GHC.initParserState
+                    (GHC.initParserOpts dflags)
+                    (GHC.stringToStringBuffer (T.unpack fit))
+                    (GHC.mkRealSrcLoc (mkFastString "<hole-fit-validation>") 1 1)
+    case parsed of
+        GHC.PFailed st -> do
+            when debug $
+                liftIO $
+                    putStrLn $
+                        showPprUnsafe $
+                            GHC.getPsErrorMessages st
+            return False
+        GHC.POk _ (p_e :: LHsExpr GhcPs) -> do
+            -- If parsing was successful, we try renaming the expression
+            (rn_e, free_vars) <- GHC.rnLExpr p_e
+            when debug $
+                liftIO $
+                    putStrLn $
+                        showPprUnsafe free_vars
+            -- Finally, we infer the type of the expression
+            expr_ty <- GHC.tcInferSigma False rn_e
+            -- And check whether that is indeed a valid hole fit
+            (does_fit, wrapper) <-
+                GHC.withoutUnification (GHC.tyCoFVsOfType $ hole_ty h) $
+                    GHC.tcCheckHoleFit hole (hole_ty h) expr_ty
+            when debug $
+                liftIO $
+                    putStrLn $
+                        showPprUnsafe wrapper
+            return does_fit
+verifyHoleFit _ _ _ = return False
 
 -- | Preprocess the response to remove empty lines, lines with only spaces, and code blocks
 preProcess :: [Text] -> [Text]

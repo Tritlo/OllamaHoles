@@ -54,7 +54,7 @@ We get the following output:
             map (show)
             \x -> map (\y -> "Number: " ++ show y) x
             \x -> replicate (length x) "Hello"
-            []
+            \x -> []
     |
     12 | main = do let k = (_b :: [Int] -> [String])
     |                    ^^

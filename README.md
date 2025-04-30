@@ -38,27 +38,24 @@ We get the following output:
 
 
 ```text
-    Main.hs:12:20: error: [GHC-88464]
-        • Found hole: _b :: [Int] -> [String]
-        Or perhaps ‘_b’ is mis-spelled, or not in scope
-        • In the expression: _b :: [Int] -> [String]
-        In an equation for ‘k’: k = (_b :: [Int] -> [String])
-        In the expression:
-            do let k = (_b :: [Int] -> [String])
-            print (k [1, 2, ....])
-        • Relevant bindings include
-            k :: [Int] -> [String] (bound at Main.hs:12:15)
-            main :: IO () (bound at Main.hs:12:1)
-        Valid hole fits include
-            \x -> map show x
-            map (show)
-            \x -> map (\y -> "Number: " ++ show y) x
-            \x -> replicate (length x) "Hello"
-            \x -> []
-    |
-    12 | main = do let k = (_b :: [Int] -> [String])
-    |                    ^^
-    Error: cabal: Failed to build exe:main from OllamaHolesTest-1.0.0.
+Main.hs:12:20: error: [GHC-88464]
+    • Found hole: _b :: [Int] -> [String]
+      Or perhaps ‘_b’ is mis-spelled, or not in scope
+    • In the expression: _b :: [Int] -> [String]
+      In an equation for ‘k’: k = (_b :: [Int] -> [String])
+      In the expression:
+        do let k = (_b :: [Int] -> [String])
+           print (k [1, 2, ....])
+    • Relevant bindings include
+        k :: [Int] -> [String] (bound at Main.hs:12:15)
+        main :: IO () (bound at Main.hs:12:1)
+      Valid hole fits include
+        map show
+        map (\x -> "Number: " ++ show x)
+        (\xs -> map (\x -> "Element: " ++ show x) xs)
+        (\xs -> concatMap (\x -> ["Element: " ++ show x]) xs)
+   |
+12 | main = do let k = (_b :: [Int] -> [String])
 ```
 
 ## Installation

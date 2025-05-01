@@ -1,5 +1,10 @@
 # Revision history for OllamaHoles
 
+## 0.1.5.1 -- 2024-05-01
+
+* Bugfix: capture suggestion constraints and make sure they're respected
+* Bugfix: Don't display errors when validating suggestions
+
 ## 0.1.5.0 -- 2024-05-01
 
 * Improve the list of things in scope

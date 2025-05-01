@@ -20,7 +20,7 @@ name:               ollama-holes-plugin
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version:            0.1.5.0
+version:            0.1.5.1
 
 -- A short (one-line) description of the package.
 synopsis: A typed-hole plugin that uses LLMs to generate valid hole-fits

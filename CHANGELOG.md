@@ -1,5 +1,9 @@
 # Revision history for OllamaHoles
 
+## 0.1.5.2 -- 2024-05-01
+
+* Bugfix: rework hole-fit validation, zonk the type and pass it on.
+
 ## 0.1.5.1 -- 2024-05-01
 
 * Bugfix: capture suggestion constraints and make sure they're respected

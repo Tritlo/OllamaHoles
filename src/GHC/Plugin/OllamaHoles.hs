@@ -13,7 +13,7 @@ import Data.Text.IO qualified as T
 import GHC.Plugins hiding ((<>))
 import GHC.Tc.Types
 import GHC.Tc.Types.Constraint (Hole (..))
-import GHC.Tc.Utils.Monad (getGblEnv, newTcRef, writeTcRef, readTcRef, discardErrs)
+import GHC.Tc.Utils.Monad (getGblEnv, newTcRef, writeTcRef, readTcRef, discardErrs, ifErrsM)
 import qualified GHC.Tc.Utils.Monad as GHC
 
 import GHC.Plugin.OllamaHoles.Backend
@@ -21,7 +21,6 @@ import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
 import GHC.Plugin.OllamaHoles.Backend.Ollama (ollamaBackend)
 import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAICompatibleBackend)
 
-import Control.Monad.Catch (handleAll)
 import GHC (GhcPs, LHsExpr, GhcRn)
 import GHC.Data.StringBuffer qualified as GHC (stringToStringBuffer)
 import GHC.Driver.Config.Parser qualified as GHC (initParserOpts)
@@ -31,7 +30,6 @@ import GHC.Parser.PostProcess qualified as GHC (runPV, unECP)
 import GHC.Rename.Expr qualified as GHC (rnLExpr)
 import GHC.Tc.Errors.Hole qualified as GHC (tcCheckHoleFit, withoutUnification)
 import GHC.Tc.Gen.App qualified as GHC  (tcInferSigma)
-import GHC.Tc.Utils.TcType qualified as GHC (tyCoFVsOfType)
 import GHC.Types.SrcLoc qualified as GHC (mkRealSrcLoc)
 
 #if __GLASGOW_HASKELL__ >= 912
@@ -48,9 +46,10 @@ import GHC.Core.TyCo.Rep
 import qualified GHC.HsToCore.Docs as GHC
 import qualified GHC.Types.Unique.Map as GHC
 import qualified GHC.Hs.Doc as GHC
-import qualified GHC.Iface.Load as GHC
-import qualified GHC.Tc.Types.Constraint as GHC
-import qualified GHC.Data.Bag as GHC
+import qualified GHC.Iface.Load as GHC (loadInterfaceForName)
+import qualified GHC.Tc.Utils.TcType as GHC (tyCoFVsOfType, mkPhiTy)
+import qualified GHC.Tc.Solver as GHC (simplifyTop, simplifyInfer, captureTopConstraints, InferMode(..))
+import qualified GHC.Tc.Solver.Monad as GHC (zonkTcType, runTcSEarlyAbort)
 
 -- | Prompt used to prompt the LLM
 promptTemplate :: Text
@@ -195,45 +194,43 @@ parseInContext fit = do
       GHC.PFailed st -> return $ Left (showPprUnsafe $ GHC.getPsErrorMessages st)
       GHC.POk _ (p_e :: LHsExpr GhcPs) -> return $ Right p_e
 
-
 -- | Check that the hole fit matches the type of the hole
 verifyHoleFit :: Bool -> TypedHole -> Text -> TcM Bool
-verifyHoleFit debug hole fit | Just h <- th_hole hole = discardErrs $ handleAll falseOnErr $ do
+verifyHoleFit debug hole fit | Just h <- th_hole hole = discardErrs $ do
     -- Instaniate a new IORef session with the current HscEnv.
-    -- First we try parsing the suggest hole-fits
-    liftIO $ when debug $ T.putStrLn $ "--- Validating " <> fit <> " ---"
     parsed <- parseInContext fit
     case parsed of
         Left err_msg-> do
             liftIO $ when debug $ do
               putStrLn "--- Error when validating: ---"
+              T.putStrLn fit
               putStrLn err_msg
             return False
         Right p_e -> do
-            when debug $ liftIO $ putStrLn $ showPprUnsafe p_e
             -- If parsing was successful, we try renaming the expression
-            (rn_e, free_vars) <- GHC.rnLExpr p_e
-            when debug $ liftIO $ putStrLn $ showPprUnsafe free_vars
-            -- Finally, we infer the type of the expression
-            (does_fit, wrapper) <-
-                GHC.withoutUnification (GHC.tyCoFVsOfType $ hole_ty h) $ do
-                    -- Make sure to capture the constraints and include those when checking the fit
-                    (expr_ty, wanteds) <- GHC.captureConstraints $ GHC.tcInferSigma False rn_e
-                    let evs = GHC.mapBag GHC.ctEvidence$ GHC.wc_simple wanteds
-                        impls = GHC.bagToList $ GHC.wc_impl wanteds
-                        hole' = hole {th_implics = th_implics hole ++ impls,
-                                      th_relevant_cts = th_relevant_cts hole <> evs}
-                    r <- GHC.tcCheckHoleFit hole' (hole_ty h) expr_ty
-                    when debug $ liftIO $ putStrLn $ showPprUnsafe r
-                    return r
-            when debug $ liftIO $ putStrLn $ showPprUnsafe wrapper
-            return does_fit
-  where
-    falseOnErr e = liftIO $ do
-        when debug $ do
-            putStrLn "--- Error when validating: ---"
-            print e
-        return False
+            (rn_e, _) <- GHC.rnLExpr p_e
+            ifErrsM (return False) $ do
+              -- Finally, we infer the type of the expression
+              (does_fit, _) <-
+                  GHC.withoutUnification (GHC.tyCoFVsOfType $ hole_ty h) $ do
+                      -- Make sure to capture the constraints and include those when checking the fit
+                      -- based on tcRnExpr, but in the TcM so that we get the right references,
+                      -- without zonking and passing the constraints on to the hole.
+                      ((tc_lvl, expr_ty), wanteds) <-
+                         GHC.captureTopConstraints $
+                          GHC.pushTcLevelM $ GHC.tcInferSigma False rn_e
+                      fresh <- GHC.newName (mkVarOcc "hf-fit")
+                      ((qtvs, dicts, _, _), residual) <-
+                        GHC.captureConstraints $
+                          GHC.simplifyInfer tc_lvl GHC.NoRestrictions
+                                            []    {- No sig vars -}
+                                            [(fresh, expr_ty)]
+                                            wanteds
+                      let r_ty = mkInfForAllTys qtvs $ GHC.mkPhiTy (map idType dicts) expr_ty
+                      _ <- GHC.simplifyTop residual
+                      zonked <- GHC.runTcSEarlyAbort $ GHC.zonkTcType r_ty
+                      GHC.tcCheckHoleFit hole (hole_ty h) zonked
+              ifErrsM (return False) (return does_fit)
 verifyHoleFit _ _ _ = return False
 
 

@@ -15,4 +15,4 @@ main :: IO ()
 main = do let _guide = Proxy :: Proxy (Text "The function should sort the list and then show each element")
           let k = (_b :: [Int] -> [String])
           print (k [1,2,3])
-    
+

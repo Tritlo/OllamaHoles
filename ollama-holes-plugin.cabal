@@ -133,7 +133,6 @@ library
                       req ^>= 3.13,
                       modern-uri ^>= 0.3,
                       aeson ^>= 2.2,
-                      exceptions ^>= 0.10,
                       containers >= 0.6 && < 0.8
 
 

@@ -1,7 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE LambdaCase #-}
 
 -- | The Ollama plugin for GHC
 module GHC.Plugin.OllamaHoles where
@@ -14,7 +13,8 @@ import Data.Text.IO qualified as T
 import GHC.Plugins hiding ((<>))
 import GHC.Tc.Types
 import GHC.Tc.Types.Constraint (Hole (..))
-import GHC.Tc.Utils.Monad (getGblEnv, newTcRef, writeTcRef, readTcRef)
+import GHC.Tc.Utils.Monad (getGblEnv, newTcRef, writeTcRef, readTcRef, discardErrs)
+import qualified GHC.Tc.Utils.Monad as GHC
 
 import GHC.Plugin.OllamaHoles.Backend
 import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
@@ -30,12 +30,9 @@ import GHC.Parser.Lexer qualified as GHC (ParseResult (..), getPsErrorMessages, 
 import GHC.Parser.PostProcess qualified as GHC (runPV, unECP)
 import GHC.Rename.Expr qualified as GHC (rnLExpr)
 import GHC.Tc.Errors.Hole qualified as GHC (tcCheckHoleFit, withoutUnification)
-import GHC.Tc.Gen.App qualified as GHC (tcInferSigma)
+import GHC.Tc.Gen.App qualified as GHC  (tcInferSigma)
 import GHC.Tc.Utils.TcType qualified as GHC (tyCoFVsOfType)
 import GHC.Types.SrcLoc qualified as GHC (mkRealSrcLoc)
-#if __GLASGOW_HASKELL__ >= 908
-import GHC.Tc.Types.Constraint (CtLocEnv(..))
-#endif
 
 #if __GLASGOW_HASKELL__ >= 912
 import GHC.Tc.Types.CtLoc (ctLocSpan)
@@ -52,6 +49,8 @@ import qualified GHC.HsToCore.Docs as GHC
 import qualified GHC.Types.Unique.Map as GHC
 import qualified GHC.Hs.Doc as GHC
 import qualified GHC.Iface.Load as GHC
+import qualified GHC.Tc.Types.Constraint as GHC
+import qualified GHC.Data.Bag as GHC
 
 -- | Prompt used to prompt the LLM
 promptTemplate :: Text
@@ -71,7 +70,7 @@ promptTemplate =
         <> "Make sure you synthesize an expression that matches the type of the hole.\n"
         <> "Output ONLY the raw Haskell expression(s), one per line.\n"
         <> "Do not include explanations, introductions, or any surrounding text.\n"
-        <> "If you are using a function from scope, make sure to use the fully qualified name.\n"
+        <> "If you are using a function from scope, make sure to use the qualified name from the list of things in scope.\n"
         <> "Output a maximum of {numexpr} expresssions.\n"
 
 -- | Determine which backend to use
@@ -98,9 +97,7 @@ plugin =
                     }
         }
   where
-        
     pluginName = "Ollama Plugin"
-       
     fitPlugin opts ref hole fits = do
         cands <- readTcRef ref
         let flags@Flags{..} = parseFlags opts
@@ -147,7 +144,7 @@ plugin =
                         let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
                         let scope = "Things in scope: " <> showSDoc dflags (ppr $ mapMaybe fullyQualified cands)
                         docs <- if include_docs then getDocs cands else return ""
-  
+
                         guide <- seekGuidance cands
                         let prompt' =
                                 replacePlaceholders
@@ -164,14 +161,13 @@ plugin =
                                     , ("{scope}", scope)
                                     , ("{docs}", docs)
                                     ]
+                        liftIO $ when debug $ do T.putStrLn $ "--- " <> pluginName <> ": Prompt ---\n" <> prompt'
                         res <- liftIO $ generateFits backend prompt' model_name
                         case res of
                             Right rsp -> do
                                 let lns = (preProcess . T.lines) rsp
+                                liftIO $ when debug $ do T.putStrLn $ "--- " <> pluginName <> ": Response ---\n" <> rsp
                                 verified <- filterM (verifyHoleFit debug hole) lns
-                                liftIO $ when debug $ do
-                                    T.putStrLn $ "--- " <> pluginName <> ": Prompt ---\n" <> prompt'
-                                    T.putStrLn $ "--- " <> pluginName <> ": Response ---\n" <> rsp
                                 let fits' = map (RawHoleFit . text . T.unpack) verified
                                 -- Return the generated fits
                                 return fits'
@@ -198,13 +194,14 @@ parseInContext fit = do
     case parsed of
       GHC.PFailed st -> return $ Left (showPprUnsafe $ GHC.getPsErrorMessages st)
       GHC.POk _ (p_e :: LHsExpr GhcPs) -> return $ Right p_e
-      
+
 
 -- | Check that the hole fit matches the type of the hole
 verifyHoleFit :: Bool -> TypedHole -> Text -> TcM Bool
-verifyHoleFit debug hole fit | Just h <- th_hole hole = handleAll falseOnErr $ do
+verifyHoleFit debug hole fit | Just h <- th_hole hole = discardErrs $ handleAll falseOnErr $ do
     -- Instaniate a new IORef session with the current HscEnv.
     -- First we try parsing the suggest hole-fits
+    liftIO $ when debug $ T.putStrLn $ "--- Validating " <> fit <> " ---"
     parsed <- parseInContext fit
     case parsed of
         Left err_msg-> do
@@ -213,15 +210,22 @@ verifyHoleFit debug hole fit | Just h <- th_hole hole = handleAll falseOnErr $ d
               putStrLn err_msg
             return False
         Right p_e -> do
+            when debug $ liftIO $ putStrLn $ showPprUnsafe p_e
             -- If parsing was successful, we try renaming the expression
             (rn_e, free_vars) <- GHC.rnLExpr p_e
             when debug $ liftIO $ putStrLn $ showPprUnsafe free_vars
             -- Finally, we infer the type of the expression
-            expr_ty <- GHC.tcInferSigma False rn_e
-            -- And check whether that is indeed a valid hole fit
             (does_fit, wrapper) <-
-                GHC.withoutUnification (GHC.tyCoFVsOfType $ hole_ty h) $
-                    GHC.tcCheckHoleFit hole (hole_ty h) expr_ty
+                GHC.withoutUnification (GHC.tyCoFVsOfType $ hole_ty h) $ do
+                    -- Make sure to capture the constraints and include those when checking the fit
+                    (expr_ty, wanteds) <- GHC.captureConstraints $ GHC.tcInferSigma False rn_e
+                    let evs = GHC.mapBag GHC.ctEvidence$ GHC.wc_simple wanteds
+                        impls = GHC.bagToList $ GHC.wc_impl wanteds
+                        hole' = hole {th_implics = th_implics hole ++ impls,
+                                      th_relevant_cts = th_relevant_cts hole <> evs}
+                    r <- GHC.tcCheckHoleFit hole' (hole_ty h) expr_ty
+                    when debug $ liftIO $ putStrLn $ showPprUnsafe r
+                    return r
             when debug $ liftIO $ putStrLn $ showPprUnsafe wrapper
             return does_fit
   where
@@ -308,7 +312,7 @@ getDocs cs = do
     allDocs docs [] = return docs
     mkDoc :: DynFlags -> GHC.UniqMap Name [GHC.HsDoc GhcRn] -> HoleFitCandidate -> String
     mkDoc dflags all_docs hfc | Just rn <- fullyQualified hfc,
-                                Just doc <- GHC.lookupUniqMap all_docs (getName hfc) = 
+                                Just doc <- GHC.lookupUniqMap all_docs (getName hfc) =
        "Documentation for `" <> showSDoc dflags (ppr rn ) <> "`:\n```\n"
        <> processDoc dflags doc
        <> "```"

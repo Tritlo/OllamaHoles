@@ -3,7 +3,6 @@
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=gemma3:27b-it-qat #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:n=5 #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:debug #-}
-{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:include-docs #-}
 
 module Main where
 
@@ -13,6 +12,7 @@ import GHC.TypeError
 import Data.Proxy
 
 main :: IO ()
-main = do let k = (_b :: [Int] -> [String])
+main = do let _guide = Proxy :: Proxy (Text "The function should sort the list and then show each int")
+          let k = (_b :: [Int] -> [String])
           print (k [1,2,3])
     

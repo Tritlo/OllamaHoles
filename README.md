@@ -60,6 +60,79 @@ Main.hs:12:20: error: [GHC-88464]
    |                    ^^
 ```
 
+
+## Guidance 
+
+We can also provide some guidance to the LLM, by having an identifier in scope called `_guide`,
+defined as `_guide = Proxy :: Proxy (Text "<guidance")`.
+
+Note that this requires `GHC.TypeError` and `Data.Proxy`, with `DataKinds` enabled
+
+Given
+
+```haskell
+{-# LANGUAGE DataKinds #-}
+{-# OPTIONS_GHC -fplugin=GHC.Plugin.OllamaHoles #-}
+{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=gemma3:27b #-}
+{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:n=5 #-}
+
+module Main where
+
+import qualified Data.List as L
+
+import GHC.TypeError
+import Data.Proxy
+
+main :: IO ()
+main = do let _guide = Proxy :: Proxy (Text "The function should take the list, sort it, and then print each integer.")
+          let k = (_b :: [Int] -> [String])
+          print (k [1,2,3])
+    
+```
+
+We get:
+
+```text
+Main.hs:16:20: error: [GHC-88464]
+    • Found hole: _b :: [Int] -> [String]
+      Or perhaps ‘_b’ is mis-spelled, or not in scope
+    • In the expression: _b :: [Int] -> [String]
+      In an equation for ‘k’: k = (_b :: [Int] -> [String])
+      In the expression:
+        do let _guide = ...
+           let k = (_b :: [Int] -> [String])
+           print (k [1, 2, ....])
+    • Relevant bindings include
+        k :: [Int] -> [String] (bound at Main.hs:16:15)
+        _guide :: Proxy
+                    (Text
+                       "The function should take the list, sort it, and then print each integer.")
+          (bound at Main.hs:15:15)
+        main :: IO () (bound at Main.hs:15:1)
+   |
+16 |           let k = (_b :: [Int] -> [String])
+   |                    ^^
+
+```
+
+## Including Documentation
+You can also pass the `-fplugin-opt=GHC.Plugin.OllamaHoles:include-docs`, flag,
+which will lookup the Haddock documentation (if available) for the functions in scope
+and provide it to the LLM. E.g. if `Data.List` is imported as `L`, the request to the
+`LLM` will include
+
+```text
+...
+Documentation for `L.subsequences`:
+ The 'subsequences' function returns the list of all subsequences of the argument.
+Documentation for `L.tails`:
+ \(\mathcal{O}(n)\). The 'tails' function returns all final segments of the
+ argument, longest first.
+Documentation for `L.transpose`:
+ The 'transpose' function transposes the rows and columns of its argument.
+...
+```
+
 ## Installation
 
 1. Install [Ollama](https://ollama.com/download)

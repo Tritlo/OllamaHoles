@@ -1,9 +1,10 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 
 -- | The Ollama plugin for GHC
-module GHC.Plugin.OllamaHoles (plugin) where
+module GHC.Plugin.OllamaHoles where
 
 import Control.Monad (filterM, unless, when)
 import Data.Char (isSpace)
@@ -13,7 +14,7 @@ import Data.Text.IO qualified as T
 import GHC.Plugins hiding ((<>))
 import GHC.Tc.Types
 import GHC.Tc.Types.Constraint (Hole (..))
-import GHC.Tc.Utils.Monad (getGblEnv, newTcRef)
+import GHC.Tc.Utils.Monad (getGblEnv, newTcRef, writeTcRef, readTcRef)
 
 import GHC.Plugin.OllamaHoles.Backend
 import GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend)
@@ -21,7 +22,7 @@ import GHC.Plugin.OllamaHoles.Backend.Ollama (ollamaBackend)
 import GHC.Plugin.OllamaHoles.Backend.OpenAI (openAICompatibleBackend)
 
 import Control.Monad.Catch (handleAll)
-import GHC (GhcPs, LHsExpr)
+import GHC (GhcPs, LHsExpr, GhcRn)
 import GHC.Data.StringBuffer qualified as GHC (stringToStringBuffer)
 import GHC.Driver.Config.Parser qualified as GHC (initParserOpts)
 import GHC.Parser qualified as GHC (parseExpression)
@@ -37,26 +38,40 @@ import GHC.Tc.Types.Constraint (CtLocEnv(..))
 #endif
 
 #if __GLASGOW_HASKELL__ >= 912
-import GHC.Tc.Types.CtLoc (ctLocEnv, ctLocSpan)
+import GHC.Tc.Types.CtLoc (ctLocSpan)
 import qualified Data.Map as Map
 #else
-import GHC.Tc.Types.Constraint (ctLocEnv, ctLocSpan)
+import GHC.Tc.Types.Constraint (ctLocSpan)
 #endif
+
+import Data.Maybe (mapMaybe)
+
+import Data.List (find)
+import GHC.Core.TyCo.Rep
+import qualified GHC.HsToCore.Docs as GHC
+import qualified GHC.Types.Unique.Map as GHC
+import qualified GHC.Hs.Doc as GHC
+import qualified GHC.Iface.Load as GHC
 
 -- | Prompt used to prompt the LLM
 promptTemplate :: Text
 promptTemplate =
-    "You are a typed-hole plugin within GHC, the Glasgow Haskell Compiler.\n"
+           "Preliminaries:"
+        <> "{docs}\n\n"
+        <> "--------------------------------------------------------------------\n"
+        <> "You are a typed-hole plugin within GHC, the Glasgow Haskell Compiler.\n"
         <> "You are given a hole in a Haskell program, and you need to fill it in.\n"
         <> "The hole is represented by the following information:\n"
-        <> "{module}\n{location}\n{imports}\n{hole_var}\n{hole_type}\n{relevant_constraints}\n{local_env}\n{global_env}\n{candidate_fits}\n\n"
+        <> "{module}\n{location}\n{imports}\n{hole_var}\n{hole_type}\n{relevant_constraints}\n{candidate_fits}\n\n"
+        <> "{scope}\n\n"
+        <> "{guidance}\n\n"
         <> "Provide one or more Haskell expressions that could fill this hole.\n"
         <> "This means coming up with an expression of the correct type that satisfies the constraints.\n"
         <> "Pay special attention to the type of the hole, specifically whether it is a function.\n"
         <> "Make sure you synthesize an expression that matches the type of the hole.\n"
         <> "Output ONLY the raw Haskell expression(s), one per line.\n"
         <> "Do not include explanations, introductions, or any surrounding text.\n"
-        <> "Feel free to include any other functions from the list of imports to generate more complicated expressions.\n"
+        <> "If you are using a function from scope, make sure to use the fully qualified name.\n"
         <> "Output a maximum of {numexpr} expresssions.\n"
 
 -- | Determine which backend to use
@@ -73,19 +88,21 @@ plugin =
         { holeFitPlugin = \opts ->
             Just $
                 HoleFitPluginR
-                    { hfPluginInit = newTcRef ()
+                    { hfPluginInit = newTcRef []
                     , hfPluginStop = \_ -> return ()
-                    , hfPluginRun =
-                        const
+                    , hfPluginRun = \ref ->
                             HoleFitPlugin
-                                { candPlugin = \_ c -> return c -- Don't filter candidates
-                                , fitPlugin = fitPlugin opts
+                                { candPlugin = \_ c -> writeTcRef ref c >> return c
+                                , fitPlugin = fitPlugin opts ref
                                 }
                     }
         }
   where
+        
     pluginName = "Ollama Plugin"
-    fitPlugin opts hole fits = do
+       
+    fitPlugin opts ref hole fits = do
+        cands <- readTcRef ref
         let flags@Flags{..} = parseFlags opts
         dflags <- getDynFlags
         gbl_env <- getGblEnv
@@ -122,22 +139,16 @@ plugin =
 #else
                 let im = "Imports: " <> showSDoc dflags (ppr $ moduleEnvKeys $ imp_mods imports)
 #endif
-
                 case th_hole hole of
                     Just h -> do
-                        let lcl_env = ctLocEnv (hole_loc h)
                         let hv = "Hole variable: _" <> occNameString (occName $ hole_occ h)
                         let ht = "Hole type: " <> showSDoc dflags (ppr $ hole_ty h)
                         let rc = "Relevant constraints: " <> showSDoc dflags (ppr $ th_relevant_cts hole)
-
-#if __GLASGOW_HASKELL__ >= 908
-                        let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ ctl_rdr lcl_env)
-#else
-                        let le = "Local environment (bindings): " <> showSDoc dflags (ppr $ tcl_rdr lcl_env)
-#endif
-
-                        let ge = "Global environment (bindings): " <> showSDoc dflags (ppr $ tcg_binds gbl_env)
                         let cf = "Candidate fits: " <> showSDoc dflags (ppr fits)
+                        let scope = "Things in scope: " <> showSDoc dflags (ppr $ mapMaybe fullyQualified cands)
+                        docs <- if include_docs then getDocs cands else return ""
+  
+                        guide <- seekGuidance cands
                         let prompt' =
                                 replacePlaceholders
                                     promptTemplate
@@ -147,10 +158,11 @@ plugin =
                                     , ("{hole_var}", hv)
                                     , ("{hole_type}", ht)
                                     , ("{relevant_constraints}", rc)
-                                    , ("{local_env}", le)
-                                    , ("{global_env}", ge)
                                     , ("{candidate_fits}", cf)
                                     , ("{numexpr}", show num_expr)
+                                    , ("{guidance}", guide)
+                                    , ("{scope}", scope)
+                                    , ("{docs}", docs)
                                     ]
                         res <- liftIO $ generateFits backend prompt' model_name
                         case res of
@@ -172,11 +184,10 @@ plugin =
                                 return fits
                     Nothing -> return fits
 
--- | Check that the hole fit matches the type of the hole
-verifyHoleFit :: Bool -> TypedHole -> Text -> TcM Bool
-verifyHoleFit debug hole fit | Just h <- th_hole hole = do
-    -- Instaniate a new IORef session with the current HscEnv.
-    -- First we try parsing the suggest hole-fits
+
+-- | Parse an expression in the current context
+parseInContext :: Text -> TcM (Either String (LHsExpr GhcPs))
+parseInContext fit = do
     dflags <- getDynFlags
     let parsed =
             GHC.unP (GHC.parseExpression >>= \p -> GHC.runPV $ GHC.unECP p) $
@@ -185,36 +196,55 @@ verifyHoleFit debug hole fit | Just h <- th_hole hole = do
                     (GHC.stringToStringBuffer (T.unpack fit))
                     (GHC.mkRealSrcLoc (mkFastString "<hole-fit-validation>") 1 1)
     case parsed of
-        GHC.PFailed st -> do
-            when debug $
-                liftIO $
-                    putStrLn $
-                        showPprUnsafe $
-                            GHC.getPsErrorMessages st
+      GHC.PFailed st -> return $ Left (showPprUnsafe $ GHC.getPsErrorMessages st)
+      GHC.POk _ (p_e :: LHsExpr GhcPs) -> return $ Right p_e
+      
+
+-- | Check that the hole fit matches the type of the hole
+verifyHoleFit :: Bool -> TypedHole -> Text -> TcM Bool
+verifyHoleFit debug hole fit | Just h <- th_hole hole = handleAll falseOnErr $ do
+    -- Instaniate a new IORef session with the current HscEnv.
+    -- First we try parsing the suggest hole-fits
+    parsed <- parseInContext fit
+    case parsed of
+        Left err_msg-> do
+            liftIO $ when debug $ do
+              putStrLn "--- Error when validating: ---"
+              putStrLn err_msg
             return False
-        GHC.POk _ (p_e :: LHsExpr GhcPs) -> handleAll falseOnErr $ do
+        Right p_e -> do
             -- If parsing was successful, we try renaming the expression
             (rn_e, free_vars) <- GHC.rnLExpr p_e
-            when debug $
-                liftIO $
-                    putStrLn $
-                        showPprUnsafe free_vars
+            when debug $ liftIO $ putStrLn $ showPprUnsafe free_vars
             -- Finally, we infer the type of the expression
             expr_ty <- GHC.tcInferSigma False rn_e
             -- And check whether that is indeed a valid hole fit
             (does_fit, wrapper) <-
                 GHC.withoutUnification (GHC.tyCoFVsOfType $ hole_ty h) $
                     GHC.tcCheckHoleFit hole (hole_ty h) expr_ty
-            when debug $
-                liftIO $
-                    putStrLn $
-                        showPprUnsafe wrapper
+            when debug $ liftIO $ putStrLn $ showPprUnsafe wrapper
             return does_fit
   where
     falseOnErr e = liftIO $ do
-        when debug $ print e
+        when debug $ do
+            putStrLn "--- Error when validating: ---"
+            print e
         return False
 verifyHoleFit _ _ _ = return False
+
+
+-- | Try to find the guide provided by the user
+seekGuidance :: [HoleFitCandidate] -> TcM String
+seekGuidance cands = do
+    case find ((== "_guide") . showPprUnsafe . occName) cands of
+      Just (IdHFCand i) | ty <- idType i -> do
+          case ty of
+            TyConApp tc [errm, errm_t] | "Proxy" <- showPprUnsafe tc,
+                                         "ErrorMessage" <- showPprUnsafe errm,
+                                         TyConApp _ [guide_msg] <- errm_t ->
+              return $ "The user provided these instructions: " <> showPprUnsafe guide_msg
+            _ -> return ""
+      _ -> return ""
 
 -- | Preprocess the response to remove empty lines, lines with only spaces, and code blocks
 preProcess :: [Text] -> [Text]
@@ -241,6 +271,7 @@ data Flags = Flags
     , backend_name :: Text
     , num_expr :: Int
     , debug :: Bool
+    , include_docs :: Bool
     , openai_base_url :: Text
     , openai_key_name :: Text
     }
@@ -253,9 +284,47 @@ defaultFlags =
         , backend_name = "ollama"
         , num_expr = 5
         , debug = False
+        , include_docs = False
         , openai_base_url = "https://api.openai.com"
         , openai_key_name = "OPENAI_API_KEY"
         }
+
+-- | Produce the documentation of all the HolefitCandidates.
+getDocs :: [HoleFitCandidate] -> TcM String
+getDocs cs = do
+    dflags <- getDynFlags
+    gbl_env <- getGblEnv
+    lcl_docs <-  fmap ( maybe GHC.emptyUniqMap GHC.docs_decls) <$> liftIO $ GHC.extractDocs dflags gbl_env
+    all_docs <- allDocs lcl_docs cs
+    return $ unlines $ filter (not . null) $ map (mkDoc dflags all_docs) cs
+ where
+    allDocs docs (IdHFCand _:cs') = allDocs docs cs'
+    allDocs docs (GreHFCand gre:cs') | gre_lcl gre = allDocs docs cs'
+    allDocs docs (c:cs') = do
+        if_docs <- mi_docs <$> GHC.loadInterfaceForName (text "hole-fit docs") (getName c)
+        case if_docs of
+          Nothing -> allDocs docs cs'
+          Just d -> allDocs (GHC.plusUniqMap docs (GHC.docs_decls d)) cs'
+    allDocs docs [] = return docs
+    mkDoc :: DynFlags -> GHC.UniqMap Name [GHC.HsDoc GhcRn] -> HoleFitCandidate -> String
+    mkDoc dflags all_docs hfc | Just rn <- fullyQualified hfc,
+                                Just doc <- GHC.lookupUniqMap all_docs (getName hfc) = 
+       "Documentation for `" <> showSDoc dflags (ppr rn ) <> "`:\n```\n"
+       <> processDoc dflags doc
+       <> "```"
+    mkDoc _ _ _ = ""
+    -- We get the first paragraph of the docs to avoid too much context
+    processDoc :: DynFlags -> [GHC.HsDoc GhcRn] -> String
+    processDoc dflags docs = first_paragraph
+      where whole_string = unlines $ map (showSDoc dflags . ppr) docs
+            first_paragraph = unlines $ takeWhile (not . null) $ lines whole_string
+
+-- | Produce a fully qualified name, e.g. L.sort if Data.List is imported as L
+fullyQualified :: HoleFitCandidate -> Maybe RdrName
+fullyQualified (IdHFCand i) = Just $ getRdrName i
+fullyQualified (NameHFCand n) = Just $ getRdrName n
+fullyQualified (GreHFCand gre) | (n:_) <- greRdrNames gre = Just n
+fullyQualified _ = Nothing
 
 -- | Parse command line options
 parseFlags :: [CommandLineOption] -> Flags
@@ -280,9 +349,9 @@ parseFlags = parseFlags' defaultFlags
             let openai_key_name = T.drop (T.length "openai_key_name=") (T.pack opt)
              in parseFlags' flags{openai_key_name = openai_key_name} opts
     parseFlags' flags (opt : opts)
-        | T.isPrefixOf "debug=" (T.pack opt) =
-            let debug = T.unpack $ T.drop (T.length "debug=") (T.pack opt)
-             in parseFlags' flags{debug = read debug} opts
+        | T.isPrefixOf "debug" (T.pack opt) = parseFlags' flags{debug = True} opts
+    parseFlags' flags (opt : opts)
+        | T.isPrefixOf "include-docs" (T.pack opt) = parseFlags' flags{include_docs = True} opts
     parseFlags' flags (opt : opts)
         | T.isPrefixOf "n=" (T.pack opt) =
             let num_expr = T.unpack $ T.drop (T.length "n=") (T.pack opt)

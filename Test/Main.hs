@@ -1,12 +1,16 @@
+{-# LANGUAGE DataKinds #-}
 {-# OPTIONS_GHC -fplugin=GHC.Plugin.OllamaHoles #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=gemma3:27b-it-qat #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:n=5 #-}
-{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:debug=True #-}
+{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:debug #-}
+{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:include-docs #-}
 
 module Main where
 
-import Data.List
+import qualified Data.List as L
 
+import GHC.TypeError
+import Data.Proxy
 
 main :: IO ()
 main = do let k = (_b :: [Int] -> [String])

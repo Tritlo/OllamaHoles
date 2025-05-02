@@ -72,27 +72,28 @@ Given
 ```haskell
 {-# LANGUAGE DataKinds #-}
 {-# OPTIONS_GHC -fplugin=GHC.Plugin.OllamaHoles #-}
-{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=qwen3:32b #-}
+-- Use a bigger model tomake it better at following instructions
+{-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:model=qwen3:14b #-}
 {-# OPTIONS_GHC -fplugin-opt=GHC.Plugin.OllamaHoles:n=10 #-}
 
 module Main where
 
 import qualified Data.List as L
-
-import GHC.TypeError
 import Data.Proxy
+import GHC.TypeError
 
 main :: IO ()
-main = do let _guide = Proxy :: Proxy (Text "The function should sort the list and then show each element")
-          let k = (_b :: [Int] -> [String])
-          print (k [1,2,3])
+main = do
+  let _guide = Proxy :: Proxy (Text "The function should sort the list and then show each element")
+  let k = (_b :: [Int] -> [String])
+  print (k [1, 2, 3])
 
 ```
 
 We get:
 
 ```text
-Main.hs:15:20: error: [GHC-88464]
+Main.hs:15:12: error: [GHC-88464]
     • Found hole: _b :: [Int] -> [String]
       Or perhaps ‘_b’ is mis-spelled, or not in scope
     • In the expression: _b :: [Int] -> [String]
@@ -102,16 +103,23 @@ Main.hs:15:20: error: [GHC-88464]
            let k = (_b :: [Int] -> [String])
            print (k [1, 2, ....])
     • Relevant bindings include
-        k :: [Int] -> [String] (bound at Main.hs:15:15)
+        k :: [Int] -> [String] (bound at Main.hs:15:7)
         _guide :: Proxy
                     (Text
                        "The function should sort the list and then show each element")
-          (bound at Main.hs:14:15)
-        main :: IO () (bound at Main.hs:14:1)
-      Valid hole fits include map show . L.sort
+          (bound at Main.hs:14:7)
+        main :: IO () (bound at Main.hs:13:1)
+      Valid hole fits include
+        map show . L.sort
+        \xs -> map show (L.sort xs)
+        L.map show . L.sort
+        \xs -> L.map show (L.sort xs)
+        \xs -> [show x | x <- L.sort xs]
+        \xs -> L.sort xs >>= \x -> [show x]
+        (Some hole fits suppressed; use -fmax-valid-hole-fits=N or -fno-max-valid-hole-fits)
    |
-15 |           let k = (_b :: [Int] -> [String])
-   |                    ^^
+15 |   let k = (_b :: [Int] -> [String])
+   |            ^^
 ```
 
 ## Including Documentation

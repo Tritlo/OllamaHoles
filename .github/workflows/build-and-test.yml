@@ -48,7 +48,7 @@ jobs:
           dist-newstyle
         key: ${{ runner.os }}-cabal-ghc-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
         restore-keys:
-          ${{ runner.os }}-cabal-ghc-${{ matrix.ghv }}-
+          ${{ runner.os }}-cabal-ghc-${{ matrix.ghc }}-
 
     - name: Update cabal index
       run: cabal update
@@ -77,7 +77,7 @@ jobs:
       matrix:
         ghc: ['9.12']
         model: ['qwen3:4b']
-    name: GHC ${{ matrix.ghc }}
+    name: Test with GHC ${{ matrix.ghc }} and ${{ matrix.model }}
     steps:
     - uses: actions/checkout@v4
 
@@ -100,7 +100,7 @@ jobs:
           dist-newstyle
         key: ${{ runner.os }}-cabal-ghc-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
         restore-keys:
-          ${{ runner.os }}-cabal-ghc-${{ matrix.ghv }}-
+          ${{ runner.os }}-cabal-ghc-${{ matrix.ghc }}-
 
     - name: Update cabal index
       run: cabal update

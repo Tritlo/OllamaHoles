@@ -7,7 +7,7 @@ module GHC.Plugin.OllamaHoles.Backend.Gemini (geminiBackend) where
 import Network.HTTP.Req
 import System.Environment (lookupEnv)
 
-import Data.Aeson (FromJSON (..), Value, object, parseJSON, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value (..), object, parseJSON, (.:), (.=))
 import Data.Aeson.Types (Parser, parseMaybe)
 
 import Data.Text (Text)
@@ -48,16 +48,18 @@ geminiBackend = Backend{..}
                             partObj <- parseJSON part
                             partObj .: "text"
 
-    generateFits prompt modelName = do
+    generateFits prompt modelName options = do
         apiKey <- lookupEnv "GEMINI_API_KEY"
         case apiKey of
             Nothing -> return $ Left "Gemini API key not found. Set the GEMINI_API_KEY environment variable."
             Just key -> do
-                let requestBody =
+                let base_req =
                         object
                             [ "contents" .= [object ["parts" .= [object ["text" .= prompt]]]]
                             ]
-
+                    requestBody = case options of
+                                    Just (Object opts) | Object base <- base_req -> Object (base <> opts)
+                                    _ -> base_req
                 let url = apiEndpoint /: "models" /: (modelName <>  ":generateContent")
                     params = "key" =: key
                     headers = header "Content-Type" "application/json"

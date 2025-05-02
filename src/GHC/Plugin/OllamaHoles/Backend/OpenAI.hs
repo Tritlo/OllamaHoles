@@ -7,7 +7,7 @@ module GHC.Plugin.OllamaHoles.Backend.OpenAI (openAIBackend, openAICompatibleBac
 import Network.HTTP.Req
 import System.Environment (lookupEnv)
 
-import Data.Aeson (FromJSON (..), Value, object, parseJSON, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value (Object), object, parseJSON, (.:), (.=))
 import Data.Aeson.Types (Parser, parseMaybe)
 import qualified Data.Aeson as Aeson
 
@@ -56,17 +56,19 @@ openAICompatibleBackend base_url key_name = Backend {..}
                     messageObj <- parseJSON message
                     messageObj .: "content"
 
-    generateFits prompt modelName = do
+    generateFits prompt modelName options = do
         apiKey <- lookupEnv $ T.unpack key_name
         case apiKey of
             Nothing -> return $ Left $ "API key not found. Set the " <> T.unpack key_name <> " environment variable."
             Just key -> do
-                let requestBody =
-                        object
+                let base_req = 
+                      object
                             [ "model" .= modelName
                             , "messages" .= [object ["role" .= ("user" :: Text), "content" .= prompt]]
                             ]
-
+                    requestBody = case options of
+                                    Just (Object opts) | Object base <- base_req -> Object (base <> opts)
+                                    _ -> base_req
                 (url, opts) <- apiEndpoint
                 let headers =
                         header "Content-Type" "application/json"

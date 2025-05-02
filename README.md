@@ -17,6 +17,28 @@ though results may vary.
 
 This plugin is also availble on Hackage [https://hackage.haskell.org/package/ollama-holes-plugin](https://hackage.haskell.org/package/ollama-holes-plugin)
 
+## Installation
+
+1. Install [Ollama](https://ollama.com/download)
+2. Install the `qwen3` model (or any other model you prefer) using the following command:
+
+```bash
+
+ollama pull qwen3
+```
+3. Clone this repository and navigate to the directory, and build the project using:
+
+```bash
+cabal build
+```
+4. Run the example using:
+
+```bash
+cabal build Test
+```
+
+5. Enjoy! If you want to change the underlying model, make sure to pass the model name via the plugin arguments (see example)
+
 ## Example
 Given
 
@@ -140,27 +162,17 @@ Documentation for `L.transpose`:
 ...
 ```
 
-## Installation
+## Model Options
 
-1. Install [Ollama](https://ollama.com/download)
-2. Install the `qwen3` model (or any other model you prefer) using the following command:
+Using
 
-```bash
-
-ollama pull qwen3
 ```
-3. Clone this repository and navigate to the directory, and build the project using:
-
-```bash
-cabal build
-```
-4. Run the example using:
-
-```bash
-cabal build Test
+-fplugin-opt=GHC.Plugin.OllamaHoles:model-options={\"num_ctxt\": 32000, \"temperature\": 1.0}
 ```
 
-5. Enjoy! If you want to change the underlying model, make sure to pass the model name via the plugin arguments (see example)
+You can pass further custom options to the model, e.g. here we increase the context length
+and set the temperature.
+
 
 ## OpenAI and Gemini backends
 

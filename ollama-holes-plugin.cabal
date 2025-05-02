@@ -20,7 +20,7 @@ name:               ollama-holes-plugin
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version:            0.1.5.3
+version:            0.1.6.0
 
 -- A short (one-line) description of the package.
 synopsis: A typed-hole plugin that uses LLMs to generate valid hole-fits
@@ -28,13 +28,13 @@ synopsis: A typed-hole plugin that uses LLMs to generate valid hole-fits
 -- A longer description of the package.
 description: This package provides a GHC plugin that uses LLMs to generate valid hole-fits.
              It supports multiple backends including Ollama, OpenAI, and Gemini.
-
+              
              The following flags are available:
               
              To specify the model to use:
               
              > -fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>
-
+              
              To include documentation in the LLM's context (not recommended for small models):
               
              > -fplugin-opt=GHC.Plugin.OllamaHoles:include-docs
@@ -58,6 +58,13 @@ description: This package provides a GHC plugin that uses LLMs to generate valid
              To enable debug output:
               
              > -fplugin-opt=GHC.Plugin.OllamaHoles:debug
+
+              
+             For custom model options:
+              
+             > -fplugin-opt=GHC.Plugin.OllamaHoles:model-options=<json>
+
+             Where <json> is an object with your parameters, e.g. `{"num_ctxt": 32000, "temperature": 1.0}`
               
              For the Ollama backend, make sure you have the Ollama CLI installed and the model
              you want to use is available. You can install the Ollama CLI by following the

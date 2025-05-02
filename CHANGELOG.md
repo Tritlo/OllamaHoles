@@ -1,5 +1,9 @@
 # Revision history for OllamaHoles
 
+## 0.1.6.0 -- 2024-05-02
+
+* Feature: Add model-options parameter
+
 ## 0.1.5.3 -- 2024-05-02
 
 * CI: Add GitHub Actions workflow for building and testing

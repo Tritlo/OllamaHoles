@@ -50,6 +50,8 @@ import qualified GHC.Iface.Load as GHC (loadInterfaceForName)
 import qualified GHC.Tc.Utils.TcType as GHC (tyCoFVsOfType, mkPhiTy)
 import qualified GHC.Tc.Solver as GHC (simplifyTop, simplifyInfer, captureTopConstraints, InferMode(..))
 import qualified GHC.Tc.Solver.Monad as GHC (zonkTcType, runTcSEarlyAbort)
+import Data.Aeson (Value)
+import qualified Data.Aeson as Aeson
 
 -- | Prompt used to prompt the LLM
 promptTemplate :: Text
@@ -107,15 +109,15 @@ plugin =
             imports = tcg_imports gbl_env
         let backend = getBackend flags
         available_models <- liftIO $ listModels backend
+        liftIO $ when debug $ T.putStrLn $ "Running " <> pluginName <> " with flags:"
+        liftIO $ when debug $ print flags
+
         case available_models of
             Nothing ->
-                error $
-                    "--- " <> T.unpack pluginName <> ": No models available, check your configuration ---"
+                error $ T.unpack pluginName <> ": No models available, check your configuration"
             Just models -> do
                 unless (model_name `elem` models) $
-                    error $
-                        "--- "
-                            <> T.unpack pluginName
+                    error $ T.unpack pluginName
                             <> ": Model "
                             <> T.unpack model_name
                             <> " not found. "
@@ -124,11 +126,10 @@ plugin =
                                     else ""
                                )
                             <> "specify another model using "
-                            <> "`-fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>` ---"
-                            <> "--- Availble models: "
+                            <> "`-fplugin-opt=GHC.Plugin.OllamaHoles:model=<model_name>`\n"
+                            <> "Availble models: \n"
                             <> T.unpack (T.unlines models)
-                            <> " ---"
-                liftIO $ when debug $ T.putStrLn $ "--- " <> pluginName <> ": Hole Found ---"
+                liftIO $ when debug $ T.putStrLn $ pluginName <> ": Hole Found"
                 let mn = "Module: " <> mod_name
                 let lc = "Location: " <> showSDoc dflags (ppr $ ctLocSpan . hole_loc <$> th_hole hole)
 #if __GLASGOW_HASKELL__ >= 912
@@ -161,12 +162,12 @@ plugin =
                                     , ("{scope}", scope)
                                     , ("{docs}", docs)
                                     ]
-                        liftIO $ when debug $ do T.putStrLn $ "--- " <> pluginName <> ": Prompt ---\n" <> prompt'
-                        res <- liftIO $ generateFits backend prompt' model_name
+                        liftIO $ when debug $ do T.putStrLn $ pluginName <> " Prompt:\n```\n" <> prompt' <> "\n```"
+                        res <- liftIO $ generateFits backend prompt' model_name model_options
                         case res of
                             Right rsp -> do
                                 let lns = (preProcess . T.lines) rsp
-                                liftIO $ when debug $ do T.putStrLn $ "--- " <> pluginName <> ": Response ---\n" <> rsp
+                                liftIO $ when debug $ do T.putStrLn $ pluginName <> " Response:\n```\n" <> rsp <> "\n```"
                                 verified <- filterM (verifyHoleFit debug hole) lns
                                 let fits' = map (RawHoleFit . text . T.unpack) verified
                                 -- Return the generated fits
@@ -203,8 +204,7 @@ verifyHoleFit debug hole fit | Just h <- th_hole hole = discardErrs $ do
     case parsed of
         Left err_msg-> do
             liftIO $ when debug $ do
-              putStrLn "--- Error when validating: ---"
-              T.putStrLn fit
+              T.putStrLn $ "Error during validation of " <> fit
               putStrLn err_msg
             return False
         Right p_e -> do
@@ -276,7 +276,8 @@ data Flags = Flags
     , include_docs :: Bool
     , openai_base_url :: Text
     , openai_key_name :: Text
-    }
+    , model_options :: Maybe Value
+    } deriving (Show)
 
 -- | Default flags for the plugin
 defaultFlags :: Flags
@@ -289,6 +290,7 @@ defaultFlags =
         , include_docs = False
         , openai_base_url = "https://api.openai.com"
         , openai_key_name = "OPENAI_API_KEY"
+        , model_options = Nothing
         }
 
 -- | Produce the documentation of all the HolefitCandidates.
@@ -358,6 +360,13 @@ parseFlags = parseFlags' defaultFlags . reverse -- reverse so outside options co
         | T.isPrefixOf "n=" (T.pack opt) =
             let num_expr = T.unpack $ T.drop (T.length "n=") (T.pack opt)
              in parseFlags' flags{num_expr = read num_expr} opts
+    parseFlags' flags (opt : opts)
+        | T.isPrefixOf "model-options=" (T.pack opt) =
+            let model_options = T.drop (T.length "model-options=") (T.pack opt)
+                m_opts = Aeson.eitherDecodeStrictText model_options
+            in case m_opts of
+                Right o -> parseFlags' flags{model_options = Just o } opts
+                Left err -> error $ "Failed to parse model-options: " <> err
     parseFlags' flags _ = flags
 
 -- | Helper function to replace placeholders in a template string

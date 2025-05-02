@@ -1,5 +1,13 @@
 # Revision history for OllamaHoles
 
+## 0.1.5.3 -- 2024-05-02
+
+* CI: Add GitHub Actions workflow for building and testing
+* CI: Build for all supported GHC versions, only run tests on GHC 9.12
+* Improvement: Update prompt and default model
+* Update documentation
+* Dependency: Remove unused exceptions dependency
+
 ## 0.1.5.2 -- 2024-05-01
 
 * Bugfix: rework hole-fit validation, zonk the type and pass it on.

@@ -68,6 +68,7 @@ promptTemplate =
         <> "Pay special attention to the type of the hole, specifically whether it is a function.\n"
         <> "Make sure you synthesize an expression that matches the type of the hole.\n"
         <> "Output ONLY the raw Haskell expression(s), one per line.\n"
+        <> "Do not try to bind the hole variable, e.g. `_b = ...`. Produce only the expression.\n"
         <> "Do not include explanations, introductions, or any surrounding text.\n"
         <> "If you are using a function from scope, make sure to use the qualified name from the list of things in scope.\n"
         <> "Output a maximum of {numexpr} expresssions.\n"
@@ -281,7 +282,7 @@ data Flags = Flags
 defaultFlags :: Flags
 defaultFlags =
     Flags
-        { model_name = "gemma3:27b-it-qat"
+        { model_name = "qwen3:latest"
         , backend_name = "ollama"
         , num_expr = 5
         , debug = False

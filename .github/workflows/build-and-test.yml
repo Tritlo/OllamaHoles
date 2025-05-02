@@ -1,0 +1,90 @@
+name: Build and run tests
+
+on:
+  push:
+    tags:
+      - '**'
+  pull_request:
+    types:
+      # We want to build when a draft branch is marked ready
+      - ready_for_review
+      # Default types
+      - opened
+      - reopened
+      - synchronize
+  # For manually triggering workflows
+  workflow_dispatch:
+
+
+jobs:
+
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    permissions: write-all
+    strategy:
+      matrix:
+        ghc: ['9.6', '9.8', '9.10', '9.12']
+        model: ['qwen3:4b']
+    name: GHC ${{ matrix.ghc }}
+    steps:
+    - uses: actions/checkout@v4
+
+    # Haskell pipeline
+    - name: Install Cabal/GHC
+      if: github.event.pull_request.draft == false
+      uses: haskell-actions/setup@v2
+      with:
+        ghc-version: ${{ matrix.ghc }}
+        cabal-version: '3.10.1.0'
+
+    # We restore the cabal packages, but also .cabal/bin for fourmolu
+    - name: Cabal cache
+      id: cabal-cache
+      if: github.event.pull_request.draft == false
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cabal/packages
+          ~/.cabal/store
+          ~/.cabal/bin
+          dist-newstyle
+        key: ${{ runner.os }}-cabal-ghc-${{ matrix.ghc }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+        restore-keys:
+          ${{ runner.os }}-cabal-ghc-${{ matrix.ghv }}-
+
+    - name: Update cabal index
+      if: github.event.pull_request.draft == false
+      run: cabal update
+
+    - name: Build Haskell project
+      if: github.event.pull_request.draft == false
+      run: cabal build
+
+    - name: Build Documentation
+      if: github.event.pull_request.draft == false
+      run: cabal haddock
+
+    # We save it here so that the haddock builds are saved as well
+    - name: Save cabal cache
+      if: github.event.pull_request.draft == false
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.cabal/packages
+          ~/.cabal/store
+          ~/.cabal/bin
+          dist-newstyle
+        key: ${{ steps.cabal-cache.outputs.cache-primary-key }}
+
+    - name: Install Ollama
+      if: github.event.pull_request.draft == false
+      run: curl -fsSL https://ollama.com/install.sh | sh
+
+    - name: Fetch  ${{ matrix.model }}
+      if: github.event.pull_request.draft == false
+      run: ollama pull ${{ matrix.model }}
+
+    - name: Build Test project 
+      if: github.event.pull_request.draft == false
+      run: cabal build Test

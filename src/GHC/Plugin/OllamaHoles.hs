@@ -330,7 +330,7 @@ fullyQualified _ = Nothing
 
 -- | Parse command line options
 parseFlags :: [CommandLineOption] -> Flags
-parseFlags = parseFlags' defaultFlags
+parseFlags = parseFlags' defaultFlags . reverse -- reverse so outside options come first
   where
     parseFlags' :: Flags -> [CommandLineOption] -> Flags
     parseFlags' flags [] = flags
